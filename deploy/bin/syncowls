@@ -1,0 +1,7 @@
+
+DIR=`dirname $0`
+pushd $DIR/../
+
+rsync -rav --progress --exclude data --exclude .git --exclude conf/hosts ./ tub51722@owlsnest.hpc.temple.edu:/home/tub51722/dev/jenergy-deploy/
+
+popd

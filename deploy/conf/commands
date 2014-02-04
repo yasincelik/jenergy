@@ -1,0 +1,16 @@
+
+
+parallel-ssh -h hosts -l ubuntu -P -v -t 0 "sudo apt-get -y install git" 
+
+   29  sudo apt-get purge openjdk*
+   30  sudo add-apt-repository ppa:webupd8team/java
+   31  sudo apt-get update
+   32  sudo apt-get install oracle-java7-installer
+   33  mvn 
+   34  sudo apt-get install maven2
+
+rdist for the jenergy folder?
+
+
+
+parallel-ssh -h hosts -l ubuntu -P -v -t 0 "/home/moutai/jenergy/bin/startAllCS.sh" 

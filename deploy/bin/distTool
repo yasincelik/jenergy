@@ -1,0 +1,123 @@
+#!/bin/bash
+# Argument = -t test -r server -p password -v
+
+usage()
+{
+cat << EOF
+usage: $0 options
+
+DISTTOOL for operating jenergy and launching/monitoring jobs
+OPTIONS:
+	deploy      Full deploy over AWS
+	deployPBS   PBS deploy
+	deployLocal   Local deploy
+	update     	Soft update
+	stopCS      Stop the Compute Space daemons
+	startCS     Start the Compute Space daemons
+	restartCS     Start the Compute Space daemons
+	run 		 Run a command
+	prun		 Run an App 
+	status		 Get the status of the processes 
+	setnodes     Set the hostfile with provided nodes 
+	setlocalnode Set the hostfile with the local node  
+	waitCS		wait for a specified number of nodes
+	waitMaster	wait for all masters to finish
+	login		login to the master node
+	watch 	watch the output of the job from the headnode		
+	help	Usage
+EOF
+}
+
+
+DIR=`dirname $0`
+pushd $DIR/../src
+
+# Now goes through all the options with a case and using shift to analyse 1 argument at a time.
+#$1 identifies the first argument, and when we use shift we discard the first argument, so $2 becomes $1 and goes again through the case.
+  case "$1" in
+    	 help)
+    		 echo "here"
+             usage
+             exit 1
+             ;;
+         deploy)
+          
+	     #python deployDist.py;
+	     exit 1             
+	     ;;
+	     
+	     deployPBS)
+	     python pbsDeploy.py;
+	     exit 1             
+	     ;;
+	     
+	     deployLocal)
+	     python pbsDeploy.py;
+	     exit 1             
+	     ;;
+         
+         update)
+        	python stopAll.py;
+            python softUpdate.py;
+	     exit 1
+             ;;
+         stopCS)
+             python stopAll.py;
+	     exit 1
+	     ;;
+         startCS)
+            python startAll.py $@
+            exit 1
+             ;;
+        status)
+            python getStatus.py $@
+            exit 1
+             ;;  
+    	run)
+            python runOnHost.py $@
+            exit 1
+             ;;   
+    	restartCS)
+            python stopAll.py;
+            python startAll.py $@;
+            exit 1
+             ;; 
+        prun)
+	    startAll.sh $@;
+           # python runApp.py $@;
+            exit 1
+             ;;
+        setnodes)
+            setnodes.sh $@
+            exit 1
+             ;;
+        setlocalnode)
+            setlocalnodes.sh
+            exit 1
+             ;;
+        login)
+        	echo 'Logging in to :'`cat ../conf/hosts| head -1`
+            ssh `cat ../conf/hosts| head -1`
+             ;;
+        watch)
+            ssh `cat ../conf/hosts| head -1` tail -f -n 100 /tmp/masteroutput;
+             ;;   
+        waitCS)
+            waitForCS.sh $@;
+             ;;
+        waitMaster)
+            waitForMaster.sh
+             ;;    
+         ?)
+             usage
+             exit
+             ;;
+         '')
+             usage
+             exit
+             ;;
+     esac
+
+popd 
+
+

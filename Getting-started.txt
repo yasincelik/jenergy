@@ -1,0 +1,597 @@
+A QUICK INTRODUCTION TO Jenergy V1.0+
+
+Justin Y. Shi (aka Yuan Shi) shi@temple.edu
+(215) 204-6437 (Voice)
+(215) 204-5082 (Fax)
+Moussa Taifi moussa.taifi@temple.edu
+Yasin Celik yasin@temple.edu
+
+(c)Temple University
+Philadelphia, PA 19122
+January 2014
+
+
+=========================================================
+1 ) What is Jenergy?
+Jenergy is a the java version of the popular Synergy project for HPC applications. The most notable difference is the distributed tuple space and distributed task queue implementation based on cassandra, astyanax, curator and zookeeper.
+
+2 ) Getting Startded
+----------------------------
+Getting started for local cluster set up:
+
+1. Clone the project:
+
+git clone git@bitbucket.org:mtaifi/jenergy.git
+//get a stable version
+cd jenergy
+//the jenergy folder will be referred to as $PROJECT (project folder) in the rest of the getting started
+//git checkout latest tag;
+git tag -l
+git checkout v0.8;
+
+2. Run maven to build and get the dependencies
+
+cd $PROJECT/bin
+./setup.sh
+//mainly does a mvn clean package assembly:single -DskipTests
+
+//download the python dependencies using easy_install
+sudo easy_install paramiko argparse
+
+//if you don't have root access example workaround with python2.6 
+//use your .local directory
+//mkdir ~/.local/lib/python2.6/site-packages/
+//easy_install --prefix=$HOME/.local paramiko argparse
+
+3. Set your paths and ssh access
+
+Add the following in your .bashrc
+
+export JENERGY_DEPLOY_PATH=$PROJECT/deploy
+export JENERGY_PATH=$PROJECT/jenergy
+export PATH=$PATH:$JENERGY_PATH/bin:$JENERGY_DEPLOY_PATH/bin
+
+export M2_HOME=maven-directory
+export M2=$M2_HOME/bin
+export PATH=$M2:$PATH
+
+export JAVA_HOME=jdk-directory
+export PATH=$JAVA_HOME:$PATH
+
+Source the modified .bashrc
+
+source ~/.bashrc
+
+Modify and add the following in $PROJECT/deploy/conf/config
+
+[SectionJenergy]
+JenergyFolder: project-folder-full-path
+
+Set consistency level to CL_ONE since we are using one node ($PROJECT/conf/consistency.conf)
+
+cat $PROJECT/conf/consistency.conf 
+
+CL_ONE
+#options here are 
+#CL_QUORUM
+#CL_ONE
+
+4. Set your host file using the distTool
+
+distTool help;
+
+distTool setlocalnode;
+distTool deployLocal;
+
+4. Start the ComputeSpace
+
+distTool startCS;
+
+//check if the 'ComputeSpaceManager and QuorumPeerMain' are started
+distTool status;
+//distTool status debug; for verbose output
+
+//to terminate the ComputeSpace
+//distTool stopCS;
+
+5. Launch the full demo example application (Matrix multiply, 1 master, 3 workers, will start the computeSpace daemons)
+
+cd $PROJECT/bin
+./runFullDemoTest.sh 1000 10 
+// Matrix size 1000, Granularity 10
+
+3 ) API Description
+------------------
+
+This the description of the API used in Jenergy
+
+1.create
+
+2.open
+
+3.close
+
+4.put
+
+5.read
+
+6.get
+1.Create
+
+boolean create(String CSName)
+
+Creates and open a connection to a ComputeSpace location with the specified name in the global ComputeSpace
+2.Open
+
+boolean open(String CSName)
+
+Open a connection to a ComputeSpace location with the specified name in the global ComputeSpace
+3.Close
+
+boolean close()
+
+Closes the connection to all the ComputeSpace locations referenced by the computespace object.
+4.Put
+
+//Whole put
+boolean put(String CSName, MatrixTuple tupleObj)
+//Chunked put
+boolean put(String CSName, MatrixTuple tupleObj, int G)
+
+a. Whole put: store the tuple as whole in the data store
+
+b. Chunked put: store chunks of the tuple in the data store based on the granularity, and creates a list of subtuples names in the distributed atomic queue to be used by get.
+5.Read
+
+//Whole read
+MatrixTuple read(String CSName, String TupleName)
+//Chunked Read
+MatrixTuple read(String CSName, String TupleName, int offset)
+
+a. Whole read: reads and returns the tuple as whole from the data store
+
+b. Chunked read: reads the tuple chunk specified by the offset variable.
+
+For example, read("INPUT", A, 4) will return a tuple with id A_4 if it exists.
+6.Get
+
+MatrixTuple get(String CSName, String TupleName)
+
+Chunked get: By default the get operation gets the next available tuple chunk id from the distributed queue and returns a chunked read operation.
+
+For example get("INPUT", A) will return the next available chunk between A_0 and A_(SIZE/G+SIZE%G), where SIZE is the number of rows in the matrix and G is the granularity declared in the master.
+
+
+4 )Writing Custom HPC Apps
+------------------------
+This is an example of the usage of the put, read, get utilities of Jenergy:
+Master Class
+
+import edu.temple.cis.jenergy.computespace.*;
+
+public class MatMulMaster implements Runnable {
+
+    public void run() {
+
+
+        System.out.println("Master");
+
+        ComputeSpaceJPA cs = new ComputeSpaceJPA();
+        ComputeSpaceJPA cs2 = new ComputeSpaceJPA();
+
+        // creates the spaces and starts the context
+        cs.create("INPUT");
+        cs.create("OUTPUT");
+
+        int SIZE = 4;
+        int G = 3;
+
+        double[][] A = new double[SIZE][SIZE];
+        double[][] B = new double[SIZE][SIZE];
+        double[][] C = new double[SIZE][SIZE];
+
+        int numRows = SIZE;
+        int numCols = SIZE;
+
+        // create the two matrices
+        for (int i = 0; i < numRows; i++)
+            for (int j = 0; j < numCols; j++) {
+                A[i][j] = i * j;
+                B[i][j] = 3 * j;
+            }
+
+        // wrap them in tuples
+        MatrixTuple tupleA = new MatrixTuple("A", A);
+        MatrixTuple tupleB = new MatrixTuple("B", B);
+
+        // put the two matrices in the computespace
+        boolean retA = cs.put("INPUT", tupleA, G);
+        boolean retB = cs.put("INPUT", tupleB);
+
+        // check if there is a problem
+        if (!retA || !retB) {
+            // if there is a problem exit
+            System.out.println("Problem in put: " + "INPUT");
+            return;
+        }
+
+        MatrixTuple tupleC;
+        // wait for the output in C (in chunks)
+        int numResults = SIZE / G;
+        if (SIZE % G != 0)
+            numResults++;
+
+        double[][] result = new double[SIZE][SIZE];
+
+        for (int i = 0; i < numResults; i++) {
+            System.out.println("");
+            tupleC = cs.read("OUTPUT", "C", i);
+            System.out.println("Master received : " + tupleC.id.toString());
+            for (int j = 0; j < tupleC.numRows; j++) {
+                result[tupleC.startRow + j] = tupleC.data[j];
+                System.out.println(j);
+            }
+        }
+
+        for (int i = 0; i < SIZE; i++) {
+            System.out.println("");
+            for (int j = 0; j < SIZE; j++)
+                System.out.print(result[i][j] + " ");
+        }
+        System.out.println("");
+
+        // shutdown the context to the compute space
+        cs.close();
+    }
+}
+
+Worker Class
+
+import edu.temple.cis.jenergy.computespace.*;
+
+public class MatMulWorker implements Runnable {
+
+    public void run() {
+
+        ComputeSpaceJPA cs = new ComputeSpaceJPA();
+
+        // creates the spaces and starts the context
+        cs.open("INPUT");
+        cs.open("OUTPUT");
+
+        MatrixTuple B;
+
+        // get the matrix B from the compute space
+        System.out.println("Matrix B: ");
+
+        B = cs.read("INPUT", "B");
+
+        System.out.println("\nMatrix A*: ");
+
+        // just square matrices for the demo
+
+        while (true) {
+            MatrixTuple A = cs.get("INPUT", "A");
+            if (A == null) {
+                // no more work terminate
+                System.out
+                        .println("Worker Terminating: No more tuples to process.");
+                break;
+            }
+
+            int G = A.numRows;
+            int numCols = A.numCols;
+            int numTotalRows = B.numRows;
+
+            double[][] result = new double[G][numCols];
+
+
+            //initialize the result matrix
+            for (int i = 0; i < G; i++) {
+                for (int j = 0; j < G; j++) {
+                    result[i][j] = 0;
+                }
+            }
+
+            for (int i =0; i < G; i++)
+                for (int k =0; k < numTotalRows; k++)
+                    for (int j =0; j < numCols; j++)
+                        result[i][j] = result[i][j] + A.data[i][k] * B.data[k][j];
+
+            String resName= "C_"+A.getRequestNum();
+            int resStartRow = A.startRow;
+
+            MatrixTuple C = new MatrixTuple(resName,result,resStartRow);
+            cs.put("OUTPUT", C);
+        }
+
+
+
+        // shutdown the context to the compute space
+        // cs.close();
+    }
+
+}
+
+Local launcher
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+
+
+public class TestMultiWorkers {
+
+    public static void main(String[] args) {
+
+        Thread master = new Thread(new MatMulMaster());
+        master.start();
+
+
+        try {
+            TimeUnit.SECONDS.sleep(10);
+        } catch (InterruptedException e1) {
+            // TODO Auto-generated catch block
+            e1.printStackTrace();
+        }
+
+        int numWorkers = 2;
+        List<Thread> workers = new ArrayList<Thread>(numWorkers);
+
+        for (int i = 0; i < numWorkers; i++) {
+            workers.add(new Thread(new MatMulWorker()));
+
+        }
+
+        for (int i = 0; i < numWorkers; i++) {
+            workers.get(i).start();
+        }
+
+
+
+        try {
+            for (Thread t : workers)
+                t.join();
+        } catch (InterruptedException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        try {
+            master.join();
+        } catch (InterruptedException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+
+
+    }
+
+}
+
+Script to copy the library, compile the classes and launch the apps locally.
+
+This assumes that the getting started steps were completed and there is a ComputeSpaceManager running and its ip is in the conf/hosts files in the root directory of the project.
+
+#set the root directory of the jenergy project
+JENERGY_HOME="/path/to/root/jenergy/project"
+
+
+#copy the jar file
+cp $JENERGY_HOME/target/Jenergy-*-jar-with-dependencies.jar ./jenergy.jar
+
+#create a local conf folder and get the hosts file
+cp -r $JENERGY_HOME/conf ./
+
+#compile and run the example
+javac TestMultiWorkers.java MatMulMaster.java MatMulWorker.java -cp .:jenergy.jar
+java  -cp .:jenergy.jar TestMultiWorkers
+
+#if running in cygwin under windows please use the bottom lines an
+#compile and run the example
+#javac TestMultiWorkers.java MatMulMaster.java MatMulWorker.java -cp ` cygpath -wp .:jenergy.jar`
+#java  -cp `cygpath -wp .:jenergy.jar` TestMultiWorkers
+
+5 ) Architecture Description
+ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+
+The Jenergy ComputeSpace is composed of two main components:
+
+Distributed Consistent Datastore Based on Cassandra database and Astyanax entity persistence API
+
+Distributed Atomic Queue Based on Zookeeper coordination service and Curator Interprocess Locking API
+For architecture image:
+https://bitbucket.org/mtaifi/jenergy/wiki/images/Architecture1.svg
+
+Supported Failure Scenarios when job in progress:
+Worker Failure:
+
+Problem:
+
+Worker acquires a subTuple and crashes.
+
+No other worker can recompute from the lost input.
+
+Solution:
+
+Queue manipulation by creating 3 lists of subTuples:
+
+subTuple Lifecycle (Initial, staged, finished):
+
+The master puts the sub tuple list in the initial list.
+
+Each worker that obtains a tuple, puts it in the staged area.
+
+Once the worker has stored the result of the calculation in the data store, the subTuple is moved to the finished list.
+
+If a worker is done but cannot find a subTuple in the initial list, then it gets a tuple from the staged list;
+
+This has the advantage of redoing any task that has been taken by a failed worker.
+
+DEMO: Killing a worker during a computation 
+http://www.youtube.com/watch?v=YziW_NLaBf8
+
+
+Master Failure:
+
+Problem:
+
+If the master fails then the job cannot be recovered and the output cannot be recollected automatically
+
+Solution:
+
+Assumption:
+
+The master has access to the same input data as was available for the failed job.
+
+The master has a recovery mode where the create, put, read and get operations are not directly applied but rather try to discover the state of the storage and the coordination services and re-inserts only the work that is needed to be reinserted.
+
+create: checks if the computespace location exists and avoids recreating it.
+
+put: checks the coordination service to see what are the subTuple ids that have be inserted in the queue already. Then inputs in the queue the remaining. Then checks in the data store for the subtuples that have been inserted and inserts the ones that were not inserted.
+
+read: read only operation does not have to be checked.
+
+get: the master is not allowed to use the get operation.
+
+DEMO: Killing the master and restarting a new one during a computation
+
+http://www.youtube.com/watch?v=Q4C_UUlrSKw
+
+DEMO: Dual masters with no Failures 
+http://www.youtube.com/watch?v=3w0yIo7BZTA
+
+DEMO: Dual masters with Primary Failure
+http://www.youtube.com/watch?v=ZK8wcmh4Jkk
+
+Storage node Failure:
+
+Problem:
+
+Tuples can be lost if the tuples' hosting cassandra process dies and the tuple is not replicated.
+
+Solution:
+
+Handled by using replication and the quorum read and writes.
+
+Quorum can tolerate [totaldatanodes - ((replication_factor / 2) + 1)] failures.
+
+Handled by the cassandra subsystem with the internal replication factor.
+
+DEMO: Storage node replica failure 
+http://www.youtube.com/watch?v=haM4lw-EtOU
+
+
+Coordination/Queue node Failure:
+
+Problem:
+
+A failure of a nodes in the zookeeper ensemble.
+
+Solution: Zookeeper internal recovery take care of that. Follower failure is handled by ignoring the failed node. If the leader is down, a new leader gets elected Problem:
+
+A partition of the zookeeper nodes makes the zookeeper ensemble unavailable.
+
+Solution:
+
+Handled by the zookeeper subsystem with the internal data persistence and replication. A majority is found in the ensemble and the clients are notified of the changed leader.
+
+DEMO: Queue node replica failure
+http://www.youtube.com/watch?v=FXSgUaqY4Qc
+
+6)Getting started for Distributed cluster set up:
+ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ-
+**Demo:
+
+Demo
+
+The distributed tools mainly support a pbs version of the distributed cluster version:
+
+1. Go throught the Local cluster setup
+
+Make sure that you have passwordless ssh to all the nodes involved. If you are using PBS then there is no need since it will take care of that for you.
+
+2. Stop any existing local cluster
+
+distTool stopCS
+
+3. Modify the consistency level if needed
+
+cat $PROJECT/conf/consistency.conf 
+
+output:
+CL_QUORUM
+#options here are 
+#CL_QUORUM
+#CL_ONE
+
+The replication level is 3, so if you are running with less than 2 nodes you need to use the CL_ONE.
+
+4. Set your host file using the distTool
+
+distTool help;
+
+//this will use $PBS_NODEFILE to populate your hostfile
+//if it hangs it means that you are not on a pbs reserved node.
+
+distTool setnodes;
+distTool deployPBS;
+
+5. Start the ComputeSpace
+
+distTool startCS;
+
+//check if the 'ComputeSpaceManager and QuorumPeerMain' are started
+distTool status;
+//distTool status debug; for verbose output
+
+//to terminate the ComputeSpace
+//distTool stopCS;
+
+//wait for the ComputeSpace to start
+distTool waitCS the-number-of-nodes-to-wait-for;
+
+6. Launch the distributed demo example application (Matrix multiply, 1 master, 2 workers, 1 on each node of the cluster, needs the compute space to be up)
+
+distTool prun -m runMaster.sh 1000 100 -w runWorker.sh -p 2 -q 1 --output
+
+7. Putting it all together in a PBS Script
+
+#PBS -l walltime=00:30:00
+########################################### 
+#PBS -N cass-test-22
+############################################
+#PBS -q normal
+#PBS -l nodes=16:ppn=8
+#PBS -o Jenergytest22.log 
+#PBS -j oe 
+#PBS -m abe
+#PBS -V 
+#PBS -M youremail
+
+
+echo $PATH
+pwd
+java -version
+rm /tmp/masteroutput
+
+
+distTool setnodes;
+distTool deployPBS;
+
+~/jenergy/deploy/bin/stopCS.sh
+~/jenergy/deploy/bin/startCS.sh
+distTool waitCS 5;
+~/jenergy/deploy/bin/startAll.sh -m runMaster.sh 6000 50 -w runWorker.sh -p 16 -q 1 --output
+#distTool prun -m runMaster.sh 1000 50 -w runWorker.sh -p 16 -q 1 --output&
+distTool waitMaster;
+~/jenergy/deploy/bin/stopCS.sh
+wait
+
+
+=========================================================
+End of Document
+=========================================================
+Contact: <shi@temple.edu>
+http://spartan.cis.temple.edu/synergy 
+
